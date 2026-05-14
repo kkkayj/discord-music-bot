@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "curl"]
+nixPkgs = ["ffmpeg", "yt-dlp"]
 
 [start]
-cmd = "curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /tmp/yt-dlp && chmod +x /tmp/yt-dlp && node index.js"
+cmd = "node index.js"
