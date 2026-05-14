@@ -6,9 +6,9 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const { create } = require('youtube-dl-exec');
 
-// Windows: bin/yt-dlp.exe, Railway: yt-dlp-linux (downloaded at build time), fallback: PATH
+// Windows: bin/yt-dlp.exe, Railway: /tmp/yt-dlp (downloaded at startup), fallback: PATH
 const localBin = path.join(__dirname, 'bin', 'yt-dlp.exe');
-const linuxBin = path.join(__dirname, 'yt-dlp-linux');
+const linuxBin = '/tmp/yt-dlp';
 const ytdlp = create(fs.existsSync(localBin) ? localBin : fs.existsSync(linuxBin) ? linuxBin : 'yt-dlp');
 
 const { TOKEN, CLIENT_ID } = process.env;
