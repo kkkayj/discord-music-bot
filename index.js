@@ -1,30 +1,46 @@
 require('dotenv').config();
 
 const path = require('path');
+const fs = require('fs');
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const fs = require('fs');
 const { create } = require('youtube-dl-exec');
 
-// On Windows use our local yt-dlp.exe, on Linux (Railway) use system yt-dlp
+// Use local yt-dlp.exe on Windows, system yt-dlp on Linux (Railway)
 const localBin = path.join(__dirname, 'bin', 'yt-dlp.exe');
 const ytdlp = create(fs.existsSync(localBin) ? localBin : 'yt-dlp');
 
 const { TOKEN, CLIENT_ID } = process.env;
 
-// Prevent yt-dlp errors from crashing the whole bot
 process.on('uncaughtException', err => console.error('Uncaught exception:', err.message));
 process.on('unhandledRejection', err => console.error('Unhandled rejection:', err.message));
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates,
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
 });
 
 // Per-guild state: { connection, player, queue: string[] }
 const guildStates = new Map();
+
+// Resolves a URL into one or more video URLs.
+// Handles: regular YouTube, YouTube Music, playlists.
+async function resolveURLs(url) {
+  const info = await ytdlp(url, {
+    flatPlaylist: true,
+    dumpSingleJson: true,
+    quiet: true,
+    noWarnings: true,
+    noCheckCertificates: true,
+  });
+
+  if (info._type === 'playlist' && info.entries && info.entries.length > 0) {
+    return info.entries
+      .filter(e => e.id || e.url)
+      .map(e => e.url || `https://www.youtube.com/watch?v=${e.id}`);
+  }
+
+  return [url];
+}
 
 function playNext(guildId) {
   const state = guildStates.get(guildId);
@@ -37,7 +53,6 @@ function playNext(guildId) {
   }
 
   const url = state.queue.shift();
-
   const subprocess = ytdlp.exec(url, {
     output: '-',
     quiet: true,
@@ -45,7 +60,7 @@ function playNext(guildId) {
     format: 'bestaudio/best',
   });
 
-  subprocess.on('error', err => console.error('yt-dlp process error:', err.message));
+  subprocess.on('error', err => console.error('yt-dlp error:', err.message));
 
   const resource = createAudioResource(subprocess.stdout);
   state.player.play(resource);
@@ -57,22 +72,14 @@ client.once('clientReady', async () => {
   const commands = [
     new SlashCommandBuilder()
       .setName('play')
-      .setDescription('Play a YouTube URL or add it to the queue')
+      .setDescription('Play a YouTube / YouTube Music URL or playlist')
       .addStringOption(opt =>
-        opt.setName('url').setDescription('YouTube URL').setRequired(true)
+        opt.setName('url').setDescription('YouTube or YouTube Music URL').setRequired(true)
       ),
-    new SlashCommandBuilder()
-      .setName('skip')
-      .setDescription('Skip the current song'),
-    new SlashCommandBuilder()
-      .setName('pause')
-      .setDescription('Pause the current song'),
-    new SlashCommandBuilder()
-      .setName('resume')
-      .setDescription('Resume the paused song'),
-    new SlashCommandBuilder()
-      .setName('disconnect')
-      .setDescription('Disconnect the bot and clear the queue'),
+    new SlashCommandBuilder().setName('skip').setDescription('Skip the current song'),
+    new SlashCommandBuilder().setName('pause').setDescription('Pause the current song'),
+    new SlashCommandBuilder().setName('resume').setDescription('Resume the paused song'),
+    new SlashCommandBuilder().setName('disconnect').setDescription('Disconnect and clear the queue'),
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -97,15 +104,24 @@ client.on('interactionCreate', async interaction => {
       return interaction.reply({ content: 'You must be in a voice channel first.', ephemeral: true });
     }
 
-    // Already playing — add to queue
-    if (state && state.player) {
-      state.queue.push(url);
-      return interaction.reply(`Added to queue (position ${state.queue.length}): ${url}`);
-    }
-
     await interaction.deferReply();
 
     try {
+      // Resolve URL — returns [url] for single, [url1, url2, ...] for playlist
+      const urls = await resolveURLs(url);
+      const isPlaylist = urls.length > 1;
+
+      // Already playing — add all to queue
+      if (state && state.player) {
+        urls.forEach(u => state.queue.push(u));
+        return interaction.editReply(
+          isPlaylist
+            ? `Added ${urls.length} songs from playlist to queue.`
+            : `Added to queue (position ${state.queue.length}): ${url}`
+        );
+      }
+
+      // Nothing playing — start now
       const player = createAudioPlayer();
       const connection = joinVoiceChannel({
         channelId: voiceChannel.id,
@@ -114,16 +130,19 @@ client.on('interactionCreate', async interaction => {
       });
 
       connection.subscribe(player);
-      guildStates.set(guildId, { connection, player, queue: [] });
 
-      const subprocess = ytdlp.exec(url, {
+      // First song plays immediately, rest go to queue
+      const [first, ...rest] = urls;
+      guildStates.set(guildId, { connection, player, queue: rest });
+
+      const subprocess = ytdlp.exec(first, {
         output: '-',
         quiet: true,
         noWarnings: true,
         format: 'bestaudio/best',
       });
 
-      subprocess.on('error', err => console.error('yt-dlp process error:', err.message));
+      subprocess.on('error', err => console.error('yt-dlp error:', err.message));
 
       const resource = createAudioResource(subprocess.stdout);
       player.play(resource);
@@ -134,11 +153,15 @@ client.on('interactionCreate', async interaction => {
         playNext(guildId);
       });
 
-      await interaction.editReply(`Now playing: ${url}`);
+      await interaction.editReply(
+        isPlaylist
+          ? `Now playing playlist: ${urls.length} songs queued.`
+          : `Now playing: ${url}`
+      );
     } catch (err) {
       console.error('Failed to play:', err.message);
       guildStates.delete(guildId);
-      await interaction.editReply('Could not play that URL. Make sure it is a valid YouTube link.');
+      await interaction.editReply('Could not play that URL. Make sure it is a valid YouTube or YouTube Music link.');
     }
   }
 
