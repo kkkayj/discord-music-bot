@@ -3,7 +3,7 @@ nixPkgs = ["ffmpeg", "curl"]
 
 [phases.build]
 cmds = [
-  "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp"
+  "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp-linux && chmod +x yt-dlp-linux"
 ]
 
 [start]
