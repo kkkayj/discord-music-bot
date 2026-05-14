@@ -25,18 +25,35 @@ const guildStates = new Map();
 // Resolves a URL into one or more video URLs.
 // Handles: regular YouTube, YouTube Music, playlists.
 async function resolveURLs(url) {
-  const info = await ytdlp(url, {
-    flatPlaylist: true,
-    dumpSingleJson: true,
-    quiet: true,
-    noWarnings: true,
-    noCheckCertificates: true,
-  });
+  try {
+    const info = await ytdlp(url, {
+      flatPlaylist: true,
+      dumpSingleJson: true,
+      quiet: true,
+      noWarnings: true,
+      noCheckCertificates: true,
+    });
 
-  if (info._type === 'playlist' && info.entries && info.entries.length > 0) {
-    return info.entries
-      .filter(e => e.id || e.url)
-      .map(e => e.url || `https://www.youtube.com/watch?v=${e.id}`);
+    if (info._type === 'playlist' && info.entries?.length > 0) {
+      const isYTMusic = url.includes('music.youtube.com');
+      const resolved = info.entries
+        .map(e => {
+          // Prefer a full URL if already present
+          if (e.url && e.url.startsWith('http')) return e.url;
+          if (e.webpage_url && e.webpage_url.startsWith('http')) return e.webpage_url;
+          // Build from ID
+          const id = e.id;
+          if (!id) return null;
+          return isYTMusic
+            ? `https://music.youtube.com/watch?v=${id}`
+            : `https://www.youtube.com/watch?v=${id}`;
+        })
+        .filter(Boolean);
+
+      if (resolved.length > 0) return resolved;
+    }
+  } catch (err) {
+    console.error('resolveURLs error:', err.message);
   }
 
   return [url];
@@ -58,9 +75,23 @@ function playNext(guildId) {
     quiet: true,
     noWarnings: true,
     format: 'bestaudio/best',
+    noCheckCertificates: true,
   });
 
-  subprocess.on('error', err => console.error('yt-dlp error:', err.message));
+  subprocess.stderr?.on('data', d => {
+    const msg = d.toString().trim();
+    if (msg) console.error('yt-dlp stderr:', msg);
+  });
+
+  // If yt-dlp fails, skip to the next song instead of disconnecting
+  subprocess.on('error', err => {
+    console.error('yt-dlp error:', err.message);
+    playNext(guildId);
+  });
+
+  subprocess.on('close', code => {
+    if (code !== 0 && code !== null) console.error(`yt-dlp exited with code ${code} for: ${url}`);
+  });
 
   const resource = createAudioResource(subprocess.stdout);
   state.player.play(resource);
@@ -140,9 +171,18 @@ client.on('interactionCreate', async interaction => {
         quiet: true,
         noWarnings: true,
         format: 'bestaudio/best',
+        noCheckCertificates: true,
       });
 
-      subprocess.on('error', err => console.error('yt-dlp error:', err.message));
+      subprocess.stderr?.on('data', d => {
+        const msg = d.toString().trim();
+        if (msg) console.error('yt-dlp stderr:', msg);
+      });
+
+      subprocess.on('error', err => {
+        console.error('yt-dlp error:', err.message);
+        playNext(guildId);
+      });
 
       const resource = createAudioResource(subprocess.stdout);
       player.play(resource);

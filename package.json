@@ -18,5 +18,8 @@
     "libsodium-wrappers": "^0.8.4",
     "opusscript": "^0.0.8",
     "youtube-dl-exec": "^3.1.6"
+  },
+  "devDependencies": {
+    "puppeteer": "^24.43.1"
   }
 }
